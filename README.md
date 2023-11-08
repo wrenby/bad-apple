@@ -14,7 +14,7 @@ Example Comments
 ![As a fellow coder......u are a frickin KING! Others: its just a spinning donut. Fellow coders: 🤯🤯🤯🤯](comments/5.png)
 ![This is actually incredibly complex to code, I can't imagine how long it took in reality to do that](comments/6.png)
 ![At first I was like huh that's pretty neat and then I remembered that I actually know how to code and holy shit that's amazing](comments/7.png)
-![As a coder.. this is brilliant lol 😅. Damn bro man only coders can understand. dammn only coders can undrstand this art. As a programmer I can confirm that is very hard](comments/8-9-10-11.png)
+![As a coder.. this is brilliant lol 😅. Damn bro man only coders can understand. dammn only coders can undrstand this art. As an programmer I can confirm that is very hard](comments/8-9-10-11.png)
 
 </details>
 

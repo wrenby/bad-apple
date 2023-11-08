@@ -1,16 +1,17 @@
 #include <iostream>
 #include <fstream>
-#include <string>
 #include <filesystem>
-#include <cmath>
+#include <string>
 #include <vector>
+
 #include <chrono>
 #include <thread>
+
 #include <ncurses.h>
+
 #include <GL/glew.h>
 #include <GL/gl.h>
 #include <GL/glext.h>
-#include <GL/freeglut.h>
 #include <EGL/egl.h>
 
 #define GLM_FORCE_RADIANS
@@ -31,11 +32,11 @@ class Renderer {
 public:
     Renderer() : vert(0), frag(0), prog(0),
     display(EGL_NO_DISPLAY), ctx(EGL_NO_CONTEXT),
-    framebuf(0), tex(0), vao(0) {
+    framebuf(0), colorbuf(0), depthbuf(0), vao(0) {
         vbos[0] = 0;
         vbos[1] = 0;
         getmaxyx(stdscr, height, width);
-        proj = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, 0.0f, 100.0f);
+        proj = calc_proj(width, height);
         view = glm::lookAt(glm::vec3(0.0f, 0.0f, 10.0f),
                            glm::vec3(0.0f, 0.0f, 0.0f),
                            glm::vec3(0.0f, 1.0f, 0.0f));
@@ -52,6 +53,10 @@ public:
             glDeleteShader(frag);
         if (vert)
             glDeleteShader(vert);
+        if (depthbuf)
+            glDeleteRenderbuffers(1, &depthbuf);
+        if (colorbuf)
+            glDeleteRenderbuffers(1, &colorbuf);
         if (framebuf)
             glDeleteFramebuffers(1, &framebuf);
         if (ctx)
@@ -90,7 +95,7 @@ public:
         }
         EGLint context_attribs[] = {
             EGL_CONTEXT_MAJOR_VERSION, 4,
-            EGL_CONTEXT_MINOR_VERSION, 1,
+            EGL_CONTEXT_MINOR_VERSION, 3,
             EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
             EGL_NONE,
         };
@@ -116,15 +121,17 @@ public:
         glGenFramebuffers(1, &framebuf);
         glBindFramebuffer(GL_FRAMEBUFFER, framebuf);
 
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width + 1, height + 1, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-        if (!glOk("glTexImage2D")) return false;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // color attachment
+        glGenRenderbuffers(1, &colorbuf);
+        glBindRenderbuffer(GL_RENDERBUFFER, colorbuf);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_R8, width, height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, colorbuf);
+        // depth buffer
+        glGenRenderbuffers(1, &depthbuf);
+        glBindRenderbuffer(GL_RENDERBUFFER, depthbuf);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width, height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthbuf);
 
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
-        if (!glOk("glFramebufferTexture2D")) return false;
         GLenum fb_check = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if(fb_check != GL_FRAMEBUFFER_COMPLETE) {
             fprintf(stderr, "Frame buffer status: %d\n", fb_check);
@@ -146,26 +153,76 @@ public:
         glAttachShader(prog, frag);
         glLinkProgram(prog);
 
-        generateTorus(2.0f, 5.0f, 10, 10);
+        generateTorus(3.0f, 6.0f, 40, 40);
 
         return true;
     }
 
-    void render_frame() {
+    void on_resize(int w, int h) {
+        proj = calc_proj(w, h);
+
+        delete[] pixels;
+        pixels = new uint8_t[round_up(width)*height];
+
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+        if (depthbuf)
+            glDeleteRenderbuffers(1, &depthbuf);
+        if (colorbuf)
+            glDeleteRenderbuffers(1, &colorbuf);
+        if (framebuf)
+            glDeleteFramebuffers(1, &framebuf);
+
+        glGenFramebuffers(1, &framebuf);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuf);
+
+        // color attachment
+        glGenRenderbuffers(1, &colorbuf);
+        glBindRenderbuffer(GL_RENDERBUFFER, colorbuf);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_R8, w, h);
+        // glOk("resize color buf");
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, colorbuf);
+
+        // depth buffer
+        glGenRenderbuffers(1, &depthbuf);
+        glBindRenderbuffer(GL_RENDERBUFFER, depthbuf);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, w, h);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthbuf);
+        // glOk("resize depth buf");
+
+        GLenum fb_check = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if(fb_check != GL_FRAMEBUFFER_COMPLETE) {
+            fprintf(stderr, "Frame buffer status: %d\n", fb_check);
+        }
+    }
+
+    void render_frame(int64_t dtime) {
         if (is_term_resized(height, width)) {
             getmaxyx(stdscr, height, width);
+            on_resize(width, height);
         }
 
-        glBindFramebuffer(GL_FRAMEBUFFER, framebuf);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuf);
         glDrawBuffer(GL_COLOR_ATTACHMENT0);
 
-        glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        // glUseProgram(prog);
-        // glBindVertexArray(vao);
-        // glDrawArrays(GL_TRIANGLE_STRIP, 0, vertices.size());
+        glViewport(0, 0, width, height);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(prog);
+        glBindVertexArray(vao);
+
+        float angle = dtime / 1000.0f;
+        glm::mat4 model = glm::rotate(glm::identity<glm::mat4>(), angle*1.5f, glm::vec3(2.0f*glm::sin(angle), 1.0f*glm::cos(angle), 0.0f));
+        glm::mat4 mvp = proj * view * model;
+        glUniformMatrix4fv(0, 1, GL_FALSE, &mvp[0][0]);
+
+        glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f - 1.5f * glm::cos(angle*2), 0.5f + 1.5f * glm::sin(angle*2), 6));
+        glUniform3fv(1, 1, &lightDir[0]);
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, vertices.size());
         glFinish();
 
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuf);
         glReadBuffer(GL_COLOR_ATTACHMENT0);
         glReadPixels(0, 0, width, height, GL_RED, GL_UNSIGNED_BYTE, pixels);
 
@@ -173,19 +230,15 @@ public:
         // + 1 for '\0', +1 for zero-indexing
         constexpr char const index[INDEX_MAX + 2] = " .,:;izn%#";
 
-        constexpr float FONT_ASPECT_RATIO = 0.5f; // not sure if possible to get programmatically
         int y;
         int stride = round_up(width);
         for (y = 0; y < height; y++) {
             int x;
             for (x = 0; x < width; x++) {
-                fprintf(stderr, "%-3d ", pixels[y*stride + x]);
-                int i = pixels[y*stride + x] / 256.0f * INDEX_MAX;
-                mvaddch(y, x, index[i]);
+                int i = std::roundf(pixels[y*stride + x] / 256.0f * INDEX_MAX);
+                mvaddch(height-y-1, x, index[i]);
             }
-            fprintf(stderr, "\n");
         }
-        fprintf(stderr, "\n");
 
         mvprintw(0, 0, "Q to Exit (%dx%d)", width, height);
     }
@@ -241,9 +294,7 @@ private:
                     float z = inner_radius * sin(v);
 
                     // add vertex
-                    vertices.push_back(x);
-                    vertices.push_back(y);
-                    vertices.push_back(z);
+                    vertices.push_back(glm::vec3(x, y, z));
 
                     // compute normal
                     float nx = cos(v) * cos(uu);
@@ -251,9 +302,7 @@ private:
                     float nz = sin(v);
 
                     // add normal
-                    normals.push_back(nx);
-                    normals.push_back(ny);
-                    normals.push_back(nz);
+                    normals.push_back(glm::vec3(nx, ny, nz));
                 }
                 // incr angle
                 v += dv;
@@ -262,24 +311,39 @@ private:
 
         glGenBuffers(2, vbos);
         glBindBuffer(GL_ARRAY_BUFFER, vbos[0]);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(float) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
         glBindBuffer(GL_ARRAY_BUFFER, vbos[1]);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(float) * normals.size(), normals.data(), GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3) * normals.size(), normals.data(), GL_STATIC_DRAW);
 
         glGenVertexArrays(1, &vao);
         glBindVertexArray(vao);
+        glEnableVertexAttribArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, vbos[0]);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glEnableVertexAttribArray(1);
         glBindBuffer(GL_ARRAY_BUFFER, vbos[1]);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
-        glEnableVertexAttribArray(0);
-        glEnableVertexAttribArray(1);
+
     }
 
     // rounds up to the nearest multiple of four
     // required because the textures are stored in multiples of four bytes
     static inline int round_up(int raw) {
-        return (raw + 4 - (raw%4));
+        int remainder = raw % 4;
+        if (remainder == 0)
+            return raw;
+        else
+            return raw + 4 - remainder;
+    }
+
+    glm::mat4 calc_proj(int w, int h) {
+        constexpr float FONT_ASPECT_RATIO = 0.5f; // not sure if possible to get programmatically
+        float ratio = w / (float)h * FONT_ASPECT_RATIO;
+        if (w * FONT_ASPECT_RATIO > h) {
+            return glm::ortho(-10.0f * ratio, 10.0f * ratio, -10.0f, 10.0f, 0.0f, 100.0f);
+        } else {
+            return glm::ortho(-10.0f, 10.0f, -10.0f / ratio, 10.0f / ratio, 0.0f, 100.0f);
+        }
     }
 
     int width, height;
@@ -287,9 +351,9 @@ private:
     glm::mat4 view, proj;
     EGLDisplay display;
     EGLContext ctx;
-    GLuint framebuf, tex;
+    GLuint framebuf, colorbuf, depthbuf;
     GLuint vert, frag, prog;
-    std::vector<float> vertices, normals;
+    std::vector<glm::vec3> vertices, normals;
     GLuint vbos[2];
     GLuint vao;
 };
@@ -303,8 +367,12 @@ int main(int argc, char** argv) {
     // make getch non-blocking
     nodelay(stdscr, TRUE);
 
+    auto start = std::chrono::system_clock::now();
+
     Renderer r;
     if (r.init()) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
         bool loop = true;
         while (loop) {
             int ch = getch();
@@ -314,11 +382,14 @@ int main(int argc, char** argv) {
                 loop = false;
             }
 
-            r.render_frame();
+            auto now = std::chrono::system_clock::now();
+            auto dtime = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+            r.render_frame(dtime);
             refresh();
 
-            using namespace std::chrono_literals;
-            std::this_thread::sleep_for(16ms);
+            auto after = std::chrono::system_clock::now();
+            auto render_time = std::chrono::duration_cast<std::chrono::milliseconds>(after - now).count();
+            std::this_thread::sleep_for(std::chrono::milliseconds(16 - render_time));
         }
     }
 

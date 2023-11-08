@@ -7,14 +7,13 @@ project(donut)
 add_executable(donut main.cpp)
 
 set(CURSES_NEED_NCURSES true)
-find_package(Curses 6.1 REQUIRED) # version 6.1 introduced direct color
+find_package(Curses REQUIRED)
 
 find_package(OpenGL REQUIRED COMPONENTS OpenGL EGL)
 find_package(GLEW REQUIRED)
-find_package(GLUT REQUIRED COMPONENTS GLUT) # almost exclusively using glut for the glutSolidTorus function
 find_package(glm REQUIRED)
-add_dependencies(donut OpenGL::OpenGL OpenGL::EGL OpenGL::GLU GLEW::GLEW GLUT::GLUT glm)
+add_dependencies(donut OpenGL::OpenGL OpenGL::EGL OpenGL::GLU GLEW::GLEW glm)
 
 include_directories(${CURSES_INCLUDE_DIRS})
 
-target_link_libraries(donut OpenGL::OpenGL OpenGL::EGL OpenGL::GLU GLEW::GLEW GLUT::GLUT glm ${CURSES_LIBRARIES})
+target_link_libraries(donut OpenGL::OpenGL OpenGL::EGL OpenGL::GLU GLEW::GLEW glm ${CURSES_LIBRARIES})

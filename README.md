@@ -2,7 +2,7 @@
 
 This felt obligatory after making an ncurses OpenGL frontend for my beloved [3D Spinning ASCII Donut](https://github.com/wrenby/donut)
 
-![](demo.mp4)
+[![Youtube Demo](https://img.youtube.com/vi/13rSYaqbDjY/0.jpg)](https://www.youtube.com/watch?v=13rSYaqbDjY)
 
 ## To Run:
 

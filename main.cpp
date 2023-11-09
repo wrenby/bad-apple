@@ -41,10 +41,6 @@ public:
         vbos[0] = 0;
         vbos[1] = 0;
         getmaxyx(stdscr, height, width);
-        proj = calc_proj(width, height);
-        view = glm::lookAt(glm::vec3(0.0f, 0.0f, 10.0f),
-                           glm::vec3(0.0f, 0.0f, 0.0f),
-                           glm::vec3(0.0f, 1.0f, 0.0f));
         pixels = new uint8_t[round_up(width)*height];
     }
     ~Renderer() {
@@ -168,8 +164,6 @@ public:
     }
 
     void on_resize(int w, int h) {
-        proj = calc_proj(w, h);
-
         delete[] pixels;
         pixels = new uint8_t[round_up(width)*height];
 
@@ -243,7 +237,8 @@ public:
             }
         }
 
-        mvprintw(0, 0, "Q to Exit (%dx%d)", width, height);
+        if (!libvlc_media_player_is_playing(mediaPlayer))
+            mvprintw(0, 0, "Q to Exit");
     }
 private:
     static GLuint loadShader(GLenum stage, char const *filename) {
@@ -365,19 +360,8 @@ private:
             return raw + 4 - remainder;
     }
 
-    glm::mat4 calc_proj(int w, int h) {
-        constexpr float FONT_ASPECT_RATIO = 0.5f; // not sure if possible to get programmatically
-        float ratio = w / (float)h * FONT_ASPECT_RATIO;
-        if (w * FONT_ASPECT_RATIO > h) {
-            return glm::ortho(-videoWidth / 2.0f * ratio, videoWidth / 2.0f * ratio, -videoHeight / 2.0f, videoHeight / 2.0f, 0.0f, 100.0f);
-        } else {
-            return glm::ortho(-videoWidth / 2.0f, videoWidth / 2.0f, -videoHeight / 2.0f / ratio, videoHeight / 2.0f / ratio, 0.0f, 100.0f);
-        }
-    }
-
     int width, height;
     uint8_t* pixels;
-    glm::mat4 view, proj;
     EGLDisplay display;
     EGLContext ctx;
     GLuint framebuf, colorbuf;

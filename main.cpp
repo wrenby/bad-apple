@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include <chrono>
 #include <thread>
@@ -18,6 +19,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <vlc/vlc.h>
+
 bool glOk(const char* msg) {
     GLenum err = glGetError();
     if (GL_NO_ERROR == err) {
@@ -32,7 +35,9 @@ class Renderer {
 public:
     Renderer() : vert(0), frag(0), prog(0),
     display(EGL_NO_DISPLAY), ctx(EGL_NO_CONTEXT),
-    framebuf(0), colorbuf(0), depthbuf(0), vao(0) {
+    framebuf(0), colorbuf(0), depthbuf(0), vao(0),
+    videoTex(0), videoWidth(1440), videoHeight(1080),
+    vlc(nullptr), mediaPlayer(nullptr), videoPixels(nullptr) {
         vbos[0] = 0;
         vbos[1] = 0;
         getmaxyx(stdscr, height, width);
@@ -43,6 +48,15 @@ public:
         pixels = new uint8_t[round_up(width)*height];
     }
     ~Renderer() {
+        if (mediaPlayer) {
+            libvlc_media_player_stop(mediaPlayer);
+            libvlc_media_player_release(mediaPlayer);
+        }
+        if (vlc)
+            libvlc_release(vlc);
+
+        if (videoTex)
+            glDeleteTextures(1, &videoTex);
         if (vao)
             glDeleteVertexArrays(1, &vao);
         if (vbos)
@@ -63,6 +77,8 @@ public:
             eglDestroyContext(display, ctx);
         if (display)
             eglTerminate(display);
+        if (videoPixels)
+            delete[] videoPixels;
         if (pixels)
             delete[] pixels;
     }
@@ -138,12 +154,12 @@ public:
             return false;
         }
 
-        vert = loadShader(GL_VERTEX_SHADER, "shaders/donut.vert");
+        vert = loadShader(GL_VERTEX_SHADER, "resources/video.vert");
         if (vert == 0) {
             fprintf(stderr, "Failed to load vertex shader\n");
             return false;
         }
-        frag = loadShader(GL_FRAGMENT_SHADER, "shaders/donut.frag");
+        frag = loadShader(GL_FRAGMENT_SHADER, "resources/video.frag");
         if (frag == 0) {
             fprintf(stderr, "Failed to load fragment shader\n");
             return false;
@@ -153,7 +169,7 @@ public:
         glAttachShader(prog, frag);
         glLinkProgram(prog);
 
-        generateTorus(3.0f, 6.0f, 40, 40);
+        initVideo();
 
         return true;
     }
@@ -211,15 +227,21 @@ public:
         glUseProgram(prog);
         glBindVertexArray(vao);
 
-        float angle = dtime / 1000.0f;
-        glm::mat4 model = glm::rotate(glm::identity<glm::mat4>(), angle*1.5f, glm::vec3(2.0f*glm::sin(angle), 1.0f*glm::cos(angle), 0.0f));
-        glm::mat4 mvp = proj * view * model;
+        glm::mat4 mvp = proj * view;
         glUniformMatrix4fv(0, 1, GL_FALSE, &mvp[0][0]);
 
-        glm::vec3 lightDir = glm::normalize(glm::vec3(0.5f - 1.5f * glm::cos(angle*2), 0.5f + 1.5f * glm::sin(angle*2), 6));
-        glUniform3fv(1, 1, &lightDir[0]);
-
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, vertices.size());
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, videoTex);
+        {
+            vlcMutex.lock();
+            if (newFrameReady) {
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, videoWidth, videoHeight, 0, GL_BGR, GL_UNSIGNED_BYTE, videoPixels);
+                newFrameReady = false;
+            }
+            vlcMutex.unlock();
+        }
+        glDrawArrays(GL_TRIANGLE_FAN, 0, vertices.size());
         glFinish();
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuf);
@@ -276,44 +298,27 @@ private:
         return out;
     }
 
-    void generateTorus(float inner_radius, float outer_radius, int sides, int rings) {
-        // https://electronut.in/torus/
-        float du = 2 * M_PI / rings;
-        float dv = 2 * M_PI / sides;
+    bool initVideo() {
+        // draw as GL_TRIANGLE_FAN
+        vertices = {
+            glm::vec3( videoWidth / 2.0f,  videoHeight / 2.0f, 0.0f),
+            glm::vec3(-videoWidth / 2.0f,  videoHeight / 2.0f, 0.0f),
+            glm::vec3(-videoWidth / 2.0f, -videoHeight / 2.0f, 0.0f),
+            glm::vec3( videoWidth / 2.0f, -videoHeight / 2.0f, 0.0f),
+        };
 
-        for (size_t i = 0; i < rings; i++) {
-            float u = i * du;
-            for (size_t j = 0; j <= sides; j++) {
-                float v = (j % sides) * dv;
-                for (size_t k = 0; k < 2; k++)
-                {
-                    float uu = u + k * du;
-                    // compute vertex
-                    float x = (outer_radius + inner_radius * cos(v)) * cos(uu);
-                    float y = (outer_radius + inner_radius * cos(v)) * sin(uu);
-                    float z = inner_radius * sin(v);
-
-                    // add vertex
-                    vertices.push_back(glm::vec3(x, y, z));
-
-                    // compute normal
-                    float nx = cos(v) * cos(uu);
-                    float ny = cos(v) * sin(uu);
-                    float nz = sin(v);
-
-                    // add normal
-                    normals.push_back(glm::vec3(nx, ny, nz));
-                }
-                // incr angle
-                v += dv;
-            }
-        }
+        texcoords = {
+            glm::vec2(0.875f, 1.0f),
+            glm::vec2(0.125f, 1.0f),
+            glm::vec2(0.125f, 0.0f),
+            glm::vec2(0.875f, 0.0f),
+        };
 
         glGenBuffers(2, vbos);
         glBindBuffer(GL_ARRAY_BUFFER, vbos[0]);
         glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
         glBindBuffer(GL_ARRAY_BUFFER, vbos[1]);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3) * normals.size(), normals.data(), GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3) * texcoords.size(), texcoords.data(), GL_STATIC_DRAW);
 
         glGenVertexArrays(1, &vao);
         glBindVertexArray(vao);
@@ -322,9 +327,52 @@ private:
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
         glEnableVertexAttribArray(1);
         glBindBuffer(GL_ARRAY_BUFFER, vbos[1]);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
 
+        glGenTextures(1, &videoTex);
+        glBindTexture(GL_TEXTURE_2D, videoTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        const char* argv[] = {
+            "--no-xlib",
+            "--no-video-title-show",
+#ifndef DEBUG
+            "--quiet", // no console output
+            "-Vdummy", // don't open a window
+#endif
+        };
+        int argc = sizeof(argv) / sizeof(*argv);
+        vlc = libvlc_new(argc, argv);
+
+        libvlc_media_t *m;
+        m = libvlc_media_new_path(vlc, "resources/bad-apple.mp4");
+        mediaPlayer = libvlc_media_player_new_from_media(m);
+        libvlc_media_release(m);
+        videoPixels = new unsigned char[videoWidth*videoHeight*3];
+        libvlc_video_set_callbacks(mediaPlayer, videoLockCallback, videoUnlockCallback, videoDisplayCallback, this);
+        libvlc_video_set_format(mediaPlayer, "RV24", videoWidth, videoHeight, videoWidth*3);
+        libvlc_media_player_play(mediaPlayer);
+
+        return true;
     }
+
+    static void *videoLockCallback(void *object, void **planes) {
+      Renderer* r = (Renderer*) object;
+      r->vlcMutex.lock();
+      planes[0] = (void*) r->videoPixels;
+      return NULL;
+    }
+
+    static void videoUnlockCallback(void *object, void *picture, void * const *planes) {
+      Renderer* r = (Renderer*) object;
+      r->newFrameReady= true;
+      r->vlcMutex.unlock();
+    }
+
+    static void videoDisplayCallback(void *object, void *picture) {}
 
     // rounds up to the nearest multiple of four
     // required because the textures are stored in multiples of four bytes
@@ -340,9 +388,9 @@ private:
         constexpr float FONT_ASPECT_RATIO = 0.5f; // not sure if possible to get programmatically
         float ratio = w / (float)h * FONT_ASPECT_RATIO;
         if (w * FONT_ASPECT_RATIO > h) {
-            return glm::ortho(-10.0f * ratio, 10.0f * ratio, -10.0f, 10.0f, 0.0f, 100.0f);
+            return glm::ortho(-videoWidth / 2.0f * ratio, videoWidth / 2.0f * ratio, -videoHeight / 2.0f, videoHeight / 2.0f, 0.0f, 100.0f);
         } else {
-            return glm::ortho(-10.0f, 10.0f, -10.0f / ratio, 10.0f / ratio, 0.0f, 100.0f);
+            return glm::ortho(-videoWidth / 2.0f, videoWidth / 2.0f, -videoHeight / 2.0f / ratio, videoHeight / 2.0f / ratio, 0.0f, 100.0f);
         }
     }
 
@@ -353,9 +401,18 @@ private:
     EGLContext ctx;
     GLuint framebuf, colorbuf, depthbuf;
     GLuint vert, frag, prog;
-    std::vector<glm::vec3> vertices, normals;
+    std::vector<glm::vec3> vertices;
+    std::vector<glm::vec2> texcoords;
     GLuint vbos[2];
     GLuint vao;
+
+    unsigned char* videoPixels;
+    GLuint videoTex;
+    unsigned int videoWidth, videoHeight;
+    libvlc_instance_t *vlc;
+    libvlc_media_player_t *mediaPlayer;
+    std::mutex vlcMutex;
+    bool newFrameReady;
 };
 
 int main(int argc, char** argv) {

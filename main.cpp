@@ -35,7 +35,7 @@ class Renderer {
 public:
     Renderer() : vert(0), frag(0), prog(0),
     display(EGL_NO_DISPLAY), ctx(EGL_NO_CONTEXT),
-    framebuf(0), colorbuf(0), depthbuf(0), vao(0),
+    framebuf(0), colorbuf(0), vao(0),
     videoTex(0), videoWidth(1440), videoHeight(1080),
     vlc(nullptr), mediaPlayer(nullptr), videoPixels(nullptr) {
         vbos[0] = 0;
@@ -67,8 +67,6 @@ public:
             glDeleteShader(frag);
         if (vert)
             glDeleteShader(vert);
-        if (depthbuf)
-            glDeleteRenderbuffers(1, &depthbuf);
         if (colorbuf)
             glDeleteRenderbuffers(1, &colorbuf);
         if (framebuf)
@@ -142,11 +140,6 @@ public:
         glBindRenderbuffer(GL_RENDERBUFFER, colorbuf);
         glRenderbufferStorage(GL_RENDERBUFFER, GL_R8, width, height);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, colorbuf);
-        // depth buffer
-        glGenRenderbuffers(1, &depthbuf);
-        glBindRenderbuffer(GL_RENDERBUFFER, depthbuf);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width, height);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthbuf);
 
         GLenum fb_check = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if(fb_check != GL_FRAMEBUFFER_COMPLETE) {
@@ -182,8 +175,6 @@ public:
 
         glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
-        if (depthbuf)
-            glDeleteRenderbuffers(1, &depthbuf);
         if (colorbuf)
             glDeleteRenderbuffers(1, &colorbuf);
         if (framebuf)
@@ -198,13 +189,6 @@ public:
         glRenderbufferStorage(GL_RENDERBUFFER, GL_R8, w, h);
         // glOk("resize color buf");
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, colorbuf);
-
-        // depth buffer
-        glGenRenderbuffers(1, &depthbuf);
-        glBindRenderbuffer(GL_RENDERBUFFER, depthbuf);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, w, h);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depthbuf);
-        // glOk("resize depth buf");
 
         GLenum fb_check = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if(fb_check != GL_FRAMEBUFFER_COMPLETE) {
@@ -223,12 +207,9 @@ public:
 
         glViewport(0, 0, width, height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT);
         glUseProgram(prog);
         glBindVertexArray(vao);
-
-        glm::mat4 mvp = proj * view;
-        glUniformMatrix4fv(0, 1, GL_FALSE, &mvp[0][0]);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, videoTex);
@@ -258,7 +239,7 @@ public:
             int x;
             for (x = 0; x < width; x++) {
                 int i = std::roundf(pixels[y*stride + x] / 256.0f * INDEX_MAX);
-                mvaddch(height-y-1, x, index[i]);
+                mvaddch(y, x, index[i]);
             }
         }
 
@@ -301,17 +282,17 @@ private:
     bool initVideo() {
         // draw as GL_TRIANGLE_FAN
         vertices = {
-            glm::vec3( videoWidth / 2.0f,  videoHeight / 2.0f, 0.0f),
-            glm::vec3(-videoWidth / 2.0f,  videoHeight / 2.0f, 0.0f),
-            glm::vec3(-videoWidth / 2.0f, -videoHeight / 2.0f, 0.0f),
-            glm::vec3( videoWidth / 2.0f, -videoHeight / 2.0f, 0.0f),
+            glm::vec3( 1.0f,  1.0f, -1.0f),
+            glm::vec3(-1.0f,  1.0f, -1.0f),
+            glm::vec3(-1.0f, -1.0f, -1.0f),
+            glm::vec3( 1.0f, -1.0f, -1.0f),
         };
 
         texcoords = {
-            glm::vec2(0.875f, 1.0f),
-            glm::vec2(0.125f, 1.0f),
-            glm::vec2(0.125f, 0.0f),
-            glm::vec2(0.875f, 0.0f),
+            glm::vec2(1.0f, 1.0f),
+            glm::vec2(0.0f, 1.0f),
+            glm::vec2(0.0f, 0.0f),
+            glm::vec2(1.0f, 0.0f),
         };
 
         glGenBuffers(2, vbos);
@@ -331,17 +312,17 @@ private:
 
         glGenTextures(1, &videoTex);
         glBindTexture(GL_TEXTURE_2D, videoTex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
 
         const char* argv[] = {
             "--no-xlib",
             "--no-video-title-show",
 #ifndef DEBUG
             "--quiet", // no console output
-            "-Vdummy", // don't open a window
 #endif
         };
         int argc = sizeof(argv) / sizeof(*argv);
@@ -399,7 +380,7 @@ private:
     glm::mat4 view, proj;
     EGLDisplay display;
     EGLContext ctx;
-    GLuint framebuf, colorbuf, depthbuf;
+    GLuint framebuf, colorbuf;
     GLuint vert, frag, prog;
     std::vector<glm::vec3> vertices;
     std::vector<glm::vec2> texcoords;
@@ -428,8 +409,6 @@ int main(int argc, char** argv) {
 
     Renderer r;
     if (r.init()) {
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LESS);
         bool loop = true;
         while (loop) {
             int ch = getch();
